@@ -1,12 +1,6 @@
 CXX      ?= g++
-CXXFLAGS ?= -std=c++20
-CPPFLAGS ?= -Wno-deprecated-enum-enum-conversion
-# INCLUDES ?= -I$(mkEigenInc) -I$(MP_INCLD_DIR)
-
-# MAKEFILEH_DIR=.
-# include $(MAKEFILEH_DIR)/Makefile.inc
-# -include Makefile.inc
-
+CXXFLAGS ?= -std=c++20 -O3 
+CPPFLAGS ?= 
 
 
 #REQUIRMENTS

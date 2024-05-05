@@ -1,11 +1,15 @@
 #include <array>
 #include <vector>
 #include <map>
-#include <stdexcept>  // For std::runtime_error
-#include <iostream>   // For std::cerr
-#include <cstdlib>    // For std::exit
+#include <stdexcept>  
+#include <iostream>   
+#include <cstdlib>    
 #include <iostream>
 #include <iomanip> 
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <complex>
 
 enum class Order {ROW,COL};
 
@@ -16,9 +20,13 @@ public:
     using size_type = std::size_t;
     using value_type = T;
     using key_type = std::array<size_t, 2>;
-
+    using complex_type = std::complex<T>;
 
 	Matrix() : nrows(0), ncols(0), isCompressed(false) {}
+
+	Matrix(const std::string& filename): isCompressed(false) {
+        matrix_market_reader(filename);
+    }
 
     Matrix(size_type rows, size_type cols, bool compressed = false)
         : nrows(rows), ncols(cols), nnz(0), isCompressed(compressed){};
@@ -61,9 +69,11 @@ public:
 	void print() const;
 
 
-	//placeholder, decide what the method should do; 
-	// void matrix_market_reader();
+    void matrix_market_reader(const std::string& filename);
 
+    size_type nrows;
+    size_type ncols;
+    size_type nnz;	
 private:
 
 	//map to handle the matrix in an uncompressed format
@@ -75,9 +85,7 @@ private:
     std::vector<size_type> col_idxs;
     std::vector<size_type> row_idxs;
 
-    size_type nrows;
-    size_type ncols;
-    size_type nnz;			//number of non-zero values
+		//number of non-zero values
 
 };
 
@@ -149,27 +157,24 @@ T& Matrix<T,O>::operator()(size_type row, size_type col) {
 template<typename T, Order O>
 void Matrix<T, O>::insert_element(size_type row, size_type col, value_type x) {
     if (!is_compressed()) {
-        // Inserting in uncompressed format
         auto inserted = m_matrix.insert({{row, col}, x});
         if (!inserted.second) {
-            // If the element was already present, just update the value
             inserted.first->second = x;
         } else {
-            // Increment nnz if a new element was actually inserted
+            // increment if a new element was actually inserted
             ++nnz;
         }
         // Update nrows and ncols based on the new inserted element
         if (row >= nrows) nrows = row + 1;
         if (col >= ncols) ncols = col + 1;
     } else {
-        // Handling insertion in compressed format
         if constexpr (O == Order::ROW) {
             size_type upBound = row_idxs[row + 1];
             size_type lowBound = row_idxs[row];
             bool found = false;
             for (auto i = lowBound; i < upBound; ++i) {
                 if (col_idxs[i] == col) {
-                    values[i] = x; // Update existing value
+                    values[i] = x; 
                     break;
                 }
             }
@@ -180,7 +185,7 @@ void Matrix<T, O>::insert_element(size_type row, size_type col, value_type x) {
             bool found = false;
             for (auto i = lowBound; i < upBound; ++i) {
                 if (row_idxs[i] == row) {
-                    values[i] = x; // Update existing value
+                    values[i] = x; 
                     break;
                 }
             }
@@ -326,4 +331,41 @@ void Matrix<T, O>::print() const {
             std::cout << std::endl;
         }
     } 
+}
+
+
+template <typename T, Order O>
+void Matrix<T, O>::matrix_market_reader(const std::string& filename) {
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        throw std::runtime_error("Could not open file: " + filename);
+    }
+
+    std::string line;
+    size_type m, n, l;
+
+    while (std::getline(file, line)) {
+        if (line[0] != '%') break;
+    }
+
+    std::istringstream iss(line);
+    iss >> m >> n >> l;
+
+    m_matrix.clear();
+    values.clear();
+    col_idxs.clear();
+    row_idxs.clear();
+    nrows = m;
+    ncols = n;
+    nnz = 0;
+
+    while (l--) {
+        size_type i, j;
+        T val;
+        file >> i >> j >> val;
+        --i; --j;
+        insert_element(i, j, val);
+    }
+
+    file.close();
 }
