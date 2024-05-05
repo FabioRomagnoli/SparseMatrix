@@ -1,12 +1,11 @@
-// namespace algebra 
-// {
-
 #include <array>
 #include <vector>
 #include <map>
 #include <stdexcept>  // For std::runtime_error
 #include <iostream>   // For std::cerr
 #include <cstdlib>    // For std::exit
+#include <iostream>
+#include <iomanip> 
 
 enum class Order {ROW,COL};
 
@@ -18,24 +17,31 @@ public:
     using value_type = T;
     using key_type = std::array<size_t, 2>;
 
-	Matrix () = default; 
-    Matrix(size_type row, size_type col) : nrow(row), ncol(col), nnz(0) {}
 
-	// void resize(size_type row, size_type col);
+	Matrix() : nrows(0), ncols(0), isCompressed(false) {}
+
+    Matrix(size_type rows, size_type cols, bool compressed = false)
+        : nrows(rows), ncols(cols), nnz(0), isCompressed(compressed){};
 
 
     struct KeyCompare {
         bool operator()(const key_type& lhs, const key_type& rhs) const {
             if constexpr (O == Order::COL) {
-                if (lhs[1] == rhs[1]) {
-                    return lhs[0] < rhs[0];
+                // First sort by column index, then by row index
+                if (lhs[1] == rhs[1]) {  
+                    return lhs[0] < rhs[0]; 
                 }
-                return lhs[1] < rhs[1];
-            } else {
-                return lhs < rhs;
+                return lhs[1] < rhs[1];  
+            } else if constexpr (O == Order::ROW) {
+                // First sort by row index, then by column index
+                if (lhs[0] == rhs[0]) {  
+                    return lhs[1] < rhs[1]; 
+                }
+                return lhs[0] < rhs[0]; 
             }
         }
     };
+
 
     void insert_element(size_type row, size_type col, value_type x);
     void compress();
@@ -46,17 +52,13 @@ public:
     T& operator()(size_type r, size_type c);
 
 
-	friend std::vector<T> operator*(Matrix<T, O> const &m,
-							std::vector<T> const &v);
+	template<typename U, Order S>
+	friend std::vector<U> operator*(Matrix<U, S> const &m,
+							std::vector<U> const &v);
 
 	void vecMultiply(const std::vector<T> &v, std::vector<T> &res) const;
 
-
-	//have to implement these still, each one for both row and col ordered
-	// std::vector<T> col(size_type i) const;
-	// std::vector<T> row(size_type i) const;
-	// void replaceCol(size_type i, std::vector<T> const &);
-	// void replaceRow(size_type i, std::vector<T> const &);
+	void print() const;
 
 
 	//placeholder, decide what the method should do; 
@@ -67,25 +69,21 @@ private:
 	//map to handle the matrix in an uncompressed format
     std::map<key_type, T, KeyCompare> m_matrix;
 
+	bool isCompressed;
 	//three vectors required to store the matrix in compressed sparse row/column
-    std::vector<T> v;		//all the Non-Zero values
-    std::vector<unsigned int> col_idxs;
-    std::vector<unsigned int> row_idxs;
-    std::vector<size_type> idx_secondary, idx_primary;
+    std::vector<T> values;		//all the Non-Zero values
+    std::vector<size_type> col_idxs;
+    std::vector<size_type> row_idxs;
 
-    size_type nrow;
-    size_type ncol;
+    size_type nrows;
+    size_type ncols;
     size_type nnz;			//number of non-zero values
 
-    void check_dimensions(size_type expected, size_type actual) const {
-        if (actual != expected) {
-            throw std::runtime_error("Dimension mismatch");
-        }
-    }
 };
 
 
 // class templates and function templates defintions //
+
 
 
 template<typename T, Order O>
@@ -103,7 +101,7 @@ const T& Matrix<T,O>::operator()(size_type row, size_type col) const {
 			size_type lowBound = row_idxs[row];
 			for(auto i = lowBound; i < upBound; ++i){
 				if(col_idxs[i] == col){
-					return v[i];
+					return values[i];
 				}
 			}
 		} else {
@@ -111,7 +109,7 @@ const T& Matrix<T,O>::operator()(size_type row, size_type col) const {
 			size_type lowBound = col_idxs[col];
 			for(auto i = lowBound; i < upBound; ++i){
 				if(row_idxs[i] == row){
-					return v[i];
+					return values[i];
 				}
 			}
 		}
@@ -133,7 +131,7 @@ T& Matrix<T,O>::operator()(size_type row, size_type col) {
 			size_type lowBound = row_idxs[row];
 			for(auto i = lowBound; i < upBound; ++i){
 				if(col_idxs[i] == col){
-					return v[i];
+					return values[i];
 				}
 			}
 		} else {
@@ -141,195 +139,191 @@ T& Matrix<T,O>::operator()(size_type row, size_type col) {
 			size_type lowBound = col_idxs[col];
 			for(auto i = lowBound; i < upBound; ++i){
 				if(row_idxs[i] == row){
-					return v[i];
+					return values[i];
 				}
 			}
 		}
 	}
 }
 
-
-template <typename T, Order O>
+template<typename T, Order O>
 void Matrix<T, O>::insert_element(size_type row, size_type col, value_type x) {
-    if (is_compressed()) {
-		if constexpr (O == Order::ROW){
-			size_type upBound = row_idxs[row + 1];
-			size_type lowBound = row_idxs[row];
-			for(auto i = lowBound; i < upBound; ++i){
-				if(col_idxs[i] == col){
-					v[i] = x;
-				}
-			}
-		} else {
-			size_type upBound = col_idxs[col + 1];
-			size_type lowBound = col_idxs[col];
-			for(auto i = lowBound; i < upBound; ++i){
-				if(row_idxs[i] == row){
-					v[i] = x;
-				}
-			}
-		}
+    if (!is_compressed()) {
+        // Inserting in uncompressed format
+        auto inserted = m_matrix.insert({{row, col}, x});
+        if (!inserted.second) {
+            // If the element was already present, just update the value
+            inserted.first->second = x;
+        } else {
+            // Increment nnz if a new element was actually inserted
+            ++nnz;
+        }
+        // Update nrows and ncols based on the new inserted element
+        if (row >= nrows) nrows = row + 1;
+        if (col >= ncols) ncols = col + 1;
     } else {
-        m_matrix[{row, col}] = x;
+        // Handling insertion in compressed format
+        if constexpr (O == Order::ROW) {
+            size_type upBound = row_idxs[row + 1];
+            size_type lowBound = row_idxs[row];
+            bool found = false;
+            for (auto i = lowBound; i < upBound; ++i) {
+                if (col_idxs[i] == col) {
+                    values[i] = x; // Update existing value
+                    break;
+                }
+            }
+            throw std::runtime_error("Can't add a value to a compressed matrix");
+        } else if constexpr (O == Order::COL) {
+            size_type upBound = col_idxs[col + 1];
+            size_type lowBound = col_idxs[col];
+            bool found = false;
+            for (auto i = lowBound; i < upBound; ++i) {
+                if (row_idxs[i] == row) {
+                    values[i] = x; // Update existing value
+                    break;
+                }
+            }
+            throw std::runtime_error("Can't add a value to a compressed matrix");
+        }
     }
 }
 
 
 template<typename T, Order O>
 bool Matrix<T, O>::is_compressed() const {
-    return v.empty() && col_idxs.empty() && row_idxs.empty() && !m_matrix.empty();
+	return isCompressed;
 }
 
-
-template <class T, Order O>
-std::vector<T> operator*(Matrix<T, O> const &m, std::vector<T> const &v)
-{
-  std::vector<double> tmp;
-  m.vecMultiply(v, tmp);
-  return tmp;
+template <typename T, Order O>
+std::vector<T> operator*(const Matrix<T, O>& m, const std::vector<T>& v) {
+    if (v.size() != (O == Order::ROW ? m.ncols : m.nrows)) {
+        throw std::runtime_error("Vector dimensions must match matrix dimensions for multiplication.");
+    }
+    std::vector<T> result(O == Order::ROW ? m.nrows : m.ncols, T(0));
+    m.vecMultiply(v, result);
+    return result;
 }
 
-
-template <class T, Order O>
-void Matrix<T, O>::vecMultiply(const std::vector<T> &v, std::vector<T> &res) const {
+template <typename T, Order O>
+void Matrix<T, O>::vecMultiply(const std::vector<T>& v, std::vector<T>& res) const {
     if (is_compressed()) {
-        res.resize(nrow, T(0));
-		for (size_type i = 0; i < nrow; i++) {
-			for (size_type j = row_idxs[i]; j < row_idxs[i + 1]; j++) {
-				res[i] += this->v[j] * v[col_idxs[j]];
-			}
-		}
+        if constexpr (O == Order::ROW) {
+            // CSR (Compressed Sparse Row)
+            for (size_type i = 0; i < nrows; i++) {
+                for (size_type j = row_idxs[i]; j < row_idxs[i + 1]; j++) {
+                    res[i] += values[j] * v[col_idxs[j]];
+                }
+            }
+        } else if constexpr (O == Order::COL) {
+            // CSC (Compressed Sparse Column)
+            for (size_type j = 0; j < ncols; j++) {
+                for (size_type i = col_idxs[j]; i < col_idxs[j + 1]; i++) {
+                    res[row_idxs[i]] += values[i] * v[j];
+                }
+            }
+        }
     } else {
-		if(v.size() != ncol)
-			{
-			std::cerr << " Vector must have the right size" << std::endl;
-			std::exit(1);
-			}
-		res.resize(nrow, T(0));
-		// for efficiency I use two different algorithms
-
-		if constexpr(O == Order::ROW){
-			// Classic A*v row by row
-			for(const auto& [key, value]: m_matrix){
-				res[key[1] / ncol] += value * v[key[0] % ncol];
-			}
-		} else {
-			//result is a linear combination of the columns of A
-			for(const auto& [key, value]: m_matrix){
-				res[key[0] % nrow] += value * v[key[0] / nrow];
-			}
-		}
-	}
+        for (const auto& [key, value] : m_matrix) {
+            res[key[0]] += value * v[key[1]];
+        }
+    }
 }
 
 
-// template <typename T>
-// void Matrix<T, Order::ROW>::compress() {
-//     if (is_compressed()) return;
-
-// 	row_idxs.push_back(0);
-// 	//compress sparse row
-// 	for(const auto& [key, value]: m_matrix) {
-// 		v.push_back(value);
-// 		col_idxs.push_back(key[1]);
-// 		if(row_idxs.back() != key[0]){
-// 			row_idxs.push_back(v.size() - 1);
-// 		}
-// 	}
-
-// 	m_matrix.clear();
-// }
-
-// template <typename T>
-// void Matrix<T, Order::ROW>::uncompress() {
-//     if (!m_matrix.empty()) return;
-
-// 	for(unsigned int i = 0, r = 0; i < v.size(); ){
-// 		if(i < row_idx[r + 1]){
-// 			m_matrix[{r,col_idxs[i]}] = v[i];
-// 			++i;
-// 		} else {
-// 			++r;
-// 		}
-// 	}
-	
-//     v.clear();
-//     col_idxs.clear();
-//     row_idxs.clear();
-// }
-
-// //valid from Col major uncompressed to compressed
-// template <typename T>
-// void Matrix<T, Order::COL>::compress() {
-//     if (is_compressed()) return;
-
-// 	col_idxs.push_back(0);
-// 	//compress sparse row
-// 	for(const auto& [key, value]: m_matrix) {
-// 		v.push_back(value);
-// 		row_idxs.push_back(key[1]);
-// 		if(col_idxs.back() != key[0]){
-// 			col_idxs.push_back(v.size() - 1);
-// 		}
-// 	}
-
-// 	m_matrix.clear();
-// }
-
-// template <typename T>
-// void Matrix<T, Order::COL>::uncompress() {
-//     if (!m_matrix.empty()) return;
-
-// 	for(unsigned int i = 0, c = 0; i < v.size(); ){
-// 		if(i < col_idxs[r + 1]){
-// 			m_matrix[{row_idxs[i],c}] = v[i];
-// 			++i;
-// 		} else {
-// 			++c;
-// 		}
-// 	}
-	
-//     v.clear();
-//     col_idxs.clear();
-//     row_idxs.clear();
-// }
-
-
-template <class T, Order O>
+template <typename T, Order O>
 void Matrix<T, O>::compress() {
 	if (is_compressed()) return;
 
-	size_type last_index = 0;
-	// Reset or initialize index vectors
-	idx_primary.push_back(0);
-
-	for (const auto& [key, value] : m_matrix) {
-		v.push_back(value);
-		idx_secondary.push_back(key[O == Order::ROW ? 1 : 0]);
-		if (last_index != key[O == Order::ROW ? 0 : 1]) {
-			idx_primary.push_back(v.size() - 1);
-			last_index = key[O == Order::ROW ? 0 : 1];
-		}
+	if constexpr (O == Order::ROW) {
+		row_idxs.clear();
+        row_idxs.push_back(0);
+        for (size_type i = 0; i < nrows; ++i) {
+            for (size_type j = 0; j < ncols; ++j) {
+                auto it = m_matrix.find({i, j});
+                if (it != m_matrix.end()) {
+                    values.push_back(it->second);
+                    col_idxs.push_back(j);
+                }
+            }
+            row_idxs.push_back(values.size());
+        }
+	} else if constexpr (O == Order::COL) {
+        col_idxs.clear();
+        col_idxs.push_back(0);
+        for (size_type j = 0; j < ncols; ++j) {
+            for (size_type i = 0; i < nrows; ++i) {
+                auto it = m_matrix.find({i, j});
+                if (it != m_matrix.end()) {
+                    values.push_back(it->second);
+                    row_idxs.push_back(i);
+                }
+            }
+            col_idxs.push_back(values.size());
+        }
 	}
-	idx_primary.push_back(v.size());
+	isCompressed = true;
 	m_matrix.clear();
 }
 
-template <class T, Order O>
+template <typename T, Order O>
 void Matrix<T, O>::uncompress() {
 	if (!m_matrix.empty()) return;
 
-	for (size_type p = 0; p < idx_primary.size() - 1; ++p) {
-		for (size_type i = idx_primary[p]; i < idx_primary[p + 1]; ++i) {
-			key_type key = {O == Order::ROW ? p : idx_secondary[i], O == Order::ROW ? idx_secondary[i] : p};
-			m_matrix[key] = v[i];
+	if constexpr (O == Order::ROW) {
+		for (size_type i = 0; i < row_idxs.size() - 1; ++i) {
+			for (size_type j = row_idxs[i]; j < row_idxs[i + 1]; ++j) {
+				m_matrix[{i, col_idxs[j]}] = values[j];
+			}
+		}
+	} else if constexpr (O == Order::COL) {
+		for (size_type i = 0; i < col_idxs.size() - 1; ++i) {
+			for (size_type j = col_idxs[i]; j < col_idxs[i + 1]; ++j) {
+				m_matrix[{row_idxs[j], i}] = values[j];
+			}
 		}
 	}
-
-	v.clear();
-	idx_secondary.clear();
-	idx_primary.clear();
+	isCompressed = false;
+	values.clear();
+	col_idxs.clear();
+	row_idxs.clear();
 }
 
-
-// }
+template <typename T, Order O>
+void Matrix<T, O>::print() const {
+    if (is_compressed()) {
+ 		std::cout << "Compressed Matrix (" << ((O == Order::ROW) ? "Row-major" : "Column-major") << "), Rows: " << nrows << ", Cols: " << ncols << std::endl;
+        if constexpr (O == Order::ROW) {
+            // Print the matrix in row-major order
+            for (size_t i = 0; i < row_idxs.size() - 1; ++i) {
+                std::cout << "Row " << i << ": ";
+                for (size_t j = row_idxs[i]; j < row_idxs[i + 1]; ++j) {
+                    std::cout << "(" << col_idxs[j] << ", " << values[j] << ") ";
+                }
+                std::cout << std::endl;
+            }
+        } else if constexpr (O == Order::COL) {
+            // Print the matrix in column-major order (CSC format)
+            for (size_t j = 0; j < ncols; ++j) {
+                std::cout << "Column " << j << ": ";
+                for (size_t i = col_idxs[j]; i < col_idxs[j + 1]; ++i) {
+                    std::cout << "(" << row_idxs[i] << ", " << values[i] << ") ";
+                }
+                std::cout << std::endl;
+            }
+        }
+    } else {
+        std::cout << "Uncompressed Matrix, Rows: " << nrows << ", Cols: " << ncols << std::endl;
+        for (size_t i = 0; i < nrows; ++i) {
+            for (size_t j = 0; j < ncols; ++j) {
+                auto it = m_matrix.find({i, j});
+                if (it != m_matrix.end()) {
+                    std::cout << std::setw(5) << it->second << " ";
+                } else {
+                    std::cout << std::setw(5) << "0 ";
+                }
+            }
+            std::cout << std::endl;
+        }
+    } 
+}

@@ -1,0 +1,2 @@
+
+A class Matrix that stores a sparse matrix. Trough the use of templates the type of data stored can be changed, as well as wheter the data is stored in row ordered or col ordered manner. The matrix can be changed from compressed and uncompressed trough the classes own methods. 
