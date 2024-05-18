@@ -1,3 +1,4 @@
+// clang-format off
 #include <array>
 #include <vector>
 #include <map>
@@ -28,12 +29,23 @@ public:
         matrix_market_reader(filename);
     }
 
-    Matrix(size_type rows, size_type cols, bool compressed = false)
+    Matrix(size_type rows, size_type cols, bool compressed = false)//@note it difficul to imagine starting with a compressed matrix
         : nrows(rows), ncols(cols), nnz(0), isCompressed(compressed){};
 
 
     struct KeyCompare {
         bool operator()(const key_type& lhs, const key_type& rhs) const {
+//@note this code is fine, but it may be simplifies by remembering 1) the lexicographic comparison is already implemented for array 2) 
+// you may use std::tie (you need to include <tuple> for this) to revert the indexes. tie produces a tuple and lexicographic comparison is implemented for tuple
+// here is the code
+/*
+  if constexpr (O == Order::COL)
+   return std::tie(lhs[1], lhs[0]) < std::tie(rhs[1], rhs[0]);
+ else if constexpr (O == Order::ROW)
+    return lhs<rhs;
+*/
+
+
             if constexpr (O == Order::COL) {
                 // First sort by column index, then by row index
                 if (lhs[1] == rhs[1]) {  
@@ -64,6 +76,7 @@ public:
 	friend std::vector<U> operator*(Matrix<U, S> const &m,
 							std::vector<U> const &v);
 
+    //@note Why not returning the resulting vector as retruned value instead of returning it by reference parameter?
 	void vecMultiply(const std::vector<T> &v, std::vector<T> &res) const;
 
 	void print() const;
@@ -71,6 +84,7 @@ public:
 
     void matrix_market_reader(const std::string& filename);
 
+//@note Keeong this data public may be dangerous. 
     size_type nrows;
     size_type ncols;
     size_type nnz;	
@@ -96,6 +110,7 @@ private:
 
 template<typename T, Order O>
 const T& Matrix<T,O>::operator()(size_type row, size_type col) const {
+    //@note this implementation is not correct. If the element is not found you should return 0
     if (!is_compressed()) {
         auto it = m_matrix.find({row, col});
         if (it != m_matrix.end()) {
@@ -107,7 +122,9 @@ const T& Matrix<T,O>::operator()(size_type row, size_type col) const {
 		if constexpr (O == Order::ROW){
 			size_type upBound = row_idxs[row + 1];
 			size_type lowBound = row_idxs[row];
+            //@note if innner indexes are ordered you can use binary search to find the element
 			for(auto i = lowBound; i < upBound; ++i){
+                //@note If the element is not found you are returning nothing! You should return 0
 				if(col_idxs[i] == col){
 					return values[i];
 				}
@@ -127,6 +144,7 @@ const T& Matrix<T,O>::operator()(size_type row, size_type col) const {
 template<typename T, Order O>
 T& Matrix<T,O>::operator()(size_type row, size_type col) {
   	if (!is_compressed()) {
+        // If the element is not found, insert a new element and return the reference to it
         auto it = m_matrix.find({row, col});
         if (it != m_matrix.end()) {
             return it->second;
@@ -134,6 +152,7 @@ T& Matrix<T,O>::operator()(size_type row, size_type col) {
 			throw std::runtime_error("Values that is being queried doesn't exist in the matrix");
 		}
     } else {
+        //@note If compressed this implementation should give an error is the element is not present.
 		if constexpr (O == Order::ROW){
 			size_type upBound = row_idxs[row + 1];
 			size_type lowBound = row_idxs[row];
@@ -165,7 +184,7 @@ void Matrix<T, O>::insert_element(size_type row, size_type col, value_type x) {
             ++nnz;
         }
         // Update nrows and ncols based on the new inserted element
-        if (row >= nrows) nrows = row + 1;
+        if (row >= nrows) nrows = row + 1;//@note nrows=std::max(nrows,row+1) is more readable
         if (col >= ncols) ncols = col + 1;
     } else {
         if constexpr (O == Order::ROW) {
@@ -239,7 +258,10 @@ void Matrix<T, O>::vecMultiply(const std::vector<T>& v, std::vector<T>& res) con
 template <typename T, Order O>
 void Matrix<T, O>::compress() {
 	if (is_compressed()) return;
-
+//@note This is very infrefficient. First od all you can reserve since the size of the map
+// is the number of non zero elements. Then, since the map gives you the element orderet, you can extract the
+//rows/colums using the method equal_range. With that information you can fill the vector for the compresed matrix without
+// the need of looping over all possible matrix elements.
 	if constexpr (O == Order::ROW) {
 		row_idxs.clear();
         row_idxs.push_back(0);
@@ -292,6 +314,7 @@ void Matrix<T, O>::uncompress() {
 	values.clear();
 	col_idxs.clear();
 	row_idxs.clear();
+    //@note These are vectors. If you want to clear memory you should use shrink_to_fit after clear.
 }
 
 template <typename T, Order O>
